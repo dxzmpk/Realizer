@@ -46,7 +46,7 @@ public class NotificationSender {
                 .setContentTitle("Realizer")
                 .setContentText(text)
                 .setVibrate(new long[] { 0, 1000, 1000, 1000, 1000 })
-                .setSmallIcon(R.drawable.ic_menu_send)
+                .setSmallIcon(R.mipmap.ic_launcher)
                 .setLargeIcon(BitmapFactory.decodeResource(contextWeakReference.get().getResources(), R.drawable.ic_menu_camera))
                 .setAutoCancel(true)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
