@@ -35,6 +35,7 @@ public class AlarmReceiverService extends Service {
         Log.e(TAG, "onDestroy");
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.O)
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         Log.e(TAG, "onStartCommand: ");

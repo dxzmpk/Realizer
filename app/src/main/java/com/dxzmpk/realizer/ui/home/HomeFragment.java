@@ -24,6 +24,7 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.core.app.NotificationCompat;
 import androidx.fragment.app.Fragment;
 import androidx.lifecycle.Observer;
@@ -31,32 +32,47 @@ import androidx.lifecycle.ViewModelProvider;
 
 import com.dxzmpk.realizer.MainActivity;
 import com.dxzmpk.realizer.R;
+import com.dxzmpk.realizer.databinding.FragmentHomeBinding;
 import com.dxzmpk.realizer.ui.receiver.AlarmReceiverService;
 import com.dxzmpk.realizer.ui.receiver.ScreenListener;
 
 import java.lang.ref.WeakReference;
+import java.time.Duration;
+import java.util.Random;
 
-public class HomeFragment extends Fragment {
+public class HomeFragment extends Fragment implements View.OnClickListener {
 
     private static final String TAG = "HomeFragment";
 
-    private HomeViewModel homeViewModel;
+    private static boolean closed;
+
+    private static HomeViewModel homeViewModel;
     private AlarmManager alarmManager;
+    private static NotificationSender notificationSender;
+    protected static FragmentHomeBinding binding;
+    static int NOTIFY_TIMES = 30;
 
     public View onCreateView(@NonNull LayoutInflater inflater,
                              ViewGroup container, Bundle savedInstanceState) {
         homeViewModel =
                 new ViewModelProvider(this).get(HomeViewModel.class);
-        View root = inflater.inflate(R.layout.fragment_home, container, false);
-        final TextView textView = root.findViewById(R.id.session_time);
-        homeViewModel.getText().observe(getViewLifecycleOwner(), new Observer<String>() {
+        binding = FragmentHomeBinding.inflate(inflater, container, false);
+        binding.settingButton.setOnClickListener(this);
+        homeViewModel.getNotifyOpen().observe(getViewLifecycleOwner(), new Observer<Boolean>() {
             @Override
-            public void onChanged(@Nullable String s) {
-                textView.setText(s);
+            public void onChanged(Boolean aBoolean) {
+                binding.setNotifyOpen(aBoolean);
+            }
+        });
+        homeViewModel.getSessionTime().observe(getViewLifecycleOwner(), new Observer<Integer>() {
+            @Override
+            public void onChanged(Integer integer) {
+                binding.setSessionTime(integer);
             }
         });
         registerUnlockReceiver();
-        return root;
+        notificationSender = new NotificationSender(getContext());
+        return binding.getRoot();
     }
 
     private void registerUnlockReceiver() {
@@ -70,50 +86,88 @@ public class HomeFragment extends Fragment {
             @Override
             public void onScreenOff() {
                 Log.e(TAG, "onScreenOff");
-                // cancel the alarm
-                if (alarmManager != null) {
-                    Intent intent = new Intent(getContext(), AlarmReceiverService.class);
-                    PendingIntent pendingIntent = PendingIntent.getService(getContext(), 0, intent, 0);
-                    alarmManager.cancel(pendingIntent);
-                }
+                closed = true;
             }
 
             @Override
             public void onUserPresent() {
-                Toast.makeText( getContext() , "解锁了" , Toast.LENGTH_SHORT ).show();
-                setAlarmTask();
                 Log.e(TAG, "onUserPresent");
+                Toast.makeText( getContext() , "解锁了" , Toast.LENGTH_SHORT ).show();
+                closed = false;
+                // 若通知功能开启
+                if (homeViewModel.getNotifyOpen().getValue()) {
+                    sendMessageForTimes(NOTIFY_TIMES, homeViewModel.getSessionTime().getValue());
+                }
             }
         });
     }
 
     static class NotificationHandler extends Handler {
-        private WeakReference<Context> context;
 
-        public NotificationHandler(@NonNull Looper looper, WeakReference<Context> context) {
+        public NotificationHandler(@NonNull Looper looper) {
             super(looper);
-            this.context = context;
         }
 
+        @RequiresApi(api = Build.VERSION_CODES.O)
         @Override
         public void handleMessage(@NonNull Message msg) {
             super.handleMessage(msg);
-            Intent intent = new Intent(context.get(), AlarmReceiverService.class);
-            context.get().startService(intent);
+            if (msg.what == 1) {
+                Log.e(TAG, "handleMessage SHOW:   id = " + msg.arg1);
+            } else {
+                Log.e(TAG, "handleMessage CANCEL: id = " + msg.arg1);
+            }
+            Log.e(TAG, "handlingMessage, versionNum = " + (Integer)msg.obj + ", curVersion = " + homeViewModel.getCurVision());
+            if (!closed && homeViewModel.getNotifyOpen().getValue() && ((Integer)msg.obj == homeViewModel.getCurVision())) {
+                if (msg.what == 1) {
+                    notificationSender.showNotification(msg.arg2, homeViewModel.getCurVision() + "已连续在线超过"+ homeViewModel.getSessionTime().getValue()+ "分钟，第" + (msg.arg1 + 1) + "次提醒");
+                } else {
+                    notificationSender.notificationManager.cancel(msg.arg2);
+                }
+            }
         }
     }
 
-    private void sendMessageForTimes() {
 
+    private void sendMessageForTimes(int n, int minutes) {
+        Handler handler = new NotificationHandler(getContext().getMainLooper());
+        int minutesDelay = minutes * 60 * 1000;
+        // 永远只记录最后的Version
+        homeViewModel.setCurVision(homeViewModel.getCurVision() + 1);
+        for (int i = 0; i < n; i ++) {
+            int randomId = new Random().nextInt();
+            Message message = new Message();
+            message.what = 1;
+            message.arg1 = i;
+            message.arg2 = randomId;
+            message.obj = homeViewModel.getCurVision();
+            handler.sendMessageDelayed(message, i * 5000 + minutesDelay);
+            Message cancelMsg = new Message();
+            cancelMsg.what = 2;
+            cancelMsg.arg1 = i;
+            cancelMsg.arg2 = randomId;
+            cancelMsg.obj = homeViewModel.getCurVision();
+            // 2s后取消消息
+            handler.sendMessageDelayed(cancelMsg, i * 5000 + 3000 + minutesDelay);
+            Log.e(TAG, "sendMessageForTimes = " + i);
+        }
     }
 
-    private void setAlarmTask() {
-        alarmManager = (AlarmManager) getContext().getSystemService(Context.ALARM_SERVICE);
-        Intent intent = new Intent(getContext(), AlarmReceiverService.class);
-        PendingIntent pendingIntent = PendingIntent.getService(getContext(), 0, intent, 0);
-        alarmManager.setRepeating(AlarmManager.RTC,
-                System.currentTimeMillis(),
-                60 * 1000, pendingIntent);
+    @Override
+    public void onClick(View v) {
+        int minutes;
+        try {
+            minutes = Integer.parseInt(binding.sessionTimeText.getText().toString());
+        } catch (Exception e) {
+            Toast.makeText(getContext(), e.getMessage(), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        boolean checked = binding.notifyOpenSwitch.isChecked();
+        homeViewModel.getSessionTime().postValue(minutes);
+        homeViewModel.getNotifyOpen().postValue(checked);
+        Toast.makeText(getContext(), "设置保存成功", Toast.LENGTH_SHORT).show();
+        if (checked) {
+            sendMessageForTimes(NOTIFY_TIMES, minutes);
+        }
     }
-
 }
